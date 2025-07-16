@@ -1,564 +1,400 @@
 {
-  "_enhanced": true,
-  "_enhanced_version": "1.0",
-  "_store_compatible": true,
-  "$schema": "../../dist/dxt-manifest.schema.json",
-  "dxt_version": "0.1",
-  "name": "file-manager-python",
-  "display_name": "Python File Manager MCP",
-  "version": "0.1.0",
-  "description": "A Python MCP server for file operations with enhanced DXT capabilities",
-  "long_description": "This enhanced extension provides comprehensive file management capabilities through a Python MCP server with dual UI support. It demonstrates advanced Python-based Desktop Extension development, including secure file operations, directory management, overlay UI, and proper MCP protocol implementation with enhanced security and permissions.",
+  "name": "enhanced-dxt-file-manager",
+  "version": "1.0.0",
+  "description": "Enhanced DXT File Manager with Gradio UI and MCP server capabilities",
+  "type": "mcp-server",
   "author": {
-    "name": "Anthropic",
-    "email": "support@anthropic.com",
-    "url": "https://github.com/anthropics",
-    "github": "anthropics",
-    "twitter": "@anthropic"
+    "name": "CompactMind Development Team",
+    "email": "dev@compactmind.com",
+    "url": "https://github.com/compactmind/test"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/compactmind/test",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/compactmind/test.git"
+  },
+  "bugs": {
+    "url": "https://github.com/compactmind/test/issues"
+  },
+  "keywords": ["file-manager", "mcp", "gradio", "dxt", "overlay", "ui"],
+  "main": "server/main.py",
+  "scripts": {
+    "start": "python server/main.py",
+    "install": "./install.sh",
+    "test": "python -m pytest tests/"
+  },
+  "requirements": {
+    "python": ">=3.8",
+    "gradio": ">=4.0.0",
+    "mcp": ">=0.1.0"
+  },
+  "dependencies": [
+    "gradio>=4.0.0",
+    "mcp>=0.1.0",
+    "pathlib",
+    "hashlib",
+    "shutil",
+    "asyncio",
+    "dataclasses",
+    "typing",
+    "mimetypes",
+    "tempfile",
+    "uuid"
+  ],
+  "runtime": {
+    "python": ">=3.8",
+    "node": ">=16.0.0"
+  },
+  "assets": {
+    "icon": "assets/icon.png",
+    "banner": "assets/banner.png",
+    "screenshot": "assets/screenshot.png",
+    "logo": "assets/logo.svg"
   },
   "maintainers": [
     {
-      "name": "ConnxHUD Team",
-      "email": "dev@connxhud.com",
-      "role": "Lead Developer"
+      "name": "CompactMind Team",
+      "email": "team@compactmind.com",
+      "role": "maintainer"
     }
   ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/anthropics/file-manager-python-mcp",
-    "branch": "main",
-    "directory": "/"
-  },
-  "homepage": "https://github.com/anthropics/file-manager-python-mcp",
-  "documentation": "https://github.com/anthropics/file-manager-python-mcp/blob/main/README.md",
-  "support": "https://github.com/anthropics/file-manager-python-mcp/issues",
-  "icon": "assets/icon.png",
-  "icon_dark": "assets/icon-dark.png",
-  "banner": "assets/banner.png",
-  "screenshots": [
-    "assets/screenshots/main-interface.png",
-    "assets/screenshots/file-operations.png",
-    "assets/screenshots/overlay-mode.png"
-  ],
-  "server": {
-    "type": "python",
-    "entry_point": "server/main.py",
-    "mcp_config": {
-      "command": "python",
-      "args": [
-        "${__dirname}/server/main.py",
-        "--workspace=${user_config.workspace_directory}",
-        "--debug=${user_config.debug_mode}",
-        "--ui-port=${ui_port}",
-        "--max-file-size=${user_config.max_file_size}"
-      ],
-      "env": {
-        "DEBUG": "${user_config.debug_mode}",
-        "PYTHONPATH": "${__dirname}/server/lib",
-        "WORKSPACE_PATH": "${user_config.workspace_directory}",
-        "UI_PORT": "${ui_port}",
-        "MCP_PORT": "${mcp_port}",
-        "LOG_LEVEL": "${user_config.log_level}",
-        "MAX_FILE_SIZE": "${user_config.max_file_size}"
-      },
-      "platforms": {
-        "win32": {
-          "command": "python.exe",
-          "env": {
-            "TEMP_DIR": "${TEMP}",
-            "CONFIG_PATH": "${APPDATA}\\FileManagerMCP"
-          }
-        },
-        "darwin": {
-          "env": {
-            "TEMP_DIR": "${TMPDIR}",
-            "CONFIG_PATH": "${HOME}/Library/Application Support/FileManagerMCP"
-          }
-        },
-        "linux": {
-          "env": {
-            "TEMP_DIR": "/tmp",
-            "CONFIG_PATH": "${HOME}/.config/FileManagerMCP"
-          }
-        }
-      },
-      "working_directory": "${__dirname}",
-      "timeout": 30000,
-      "restart_policy": "on-failure",
-      "max_restarts": 3
-    }
-  },
-  "dual_ui": {
+  "_enhanced": true,
+  "_enhanced_version": "2.0.0",
+  "_store_compatible": true,
+  "dualUI": {
     "enabled": true,
-    "ui_type": "web",
-    "ui_entry_point": "ui/index.html",
-    "ui_server": {
-      "port": "${ui_port}",
-      "host": "localhost",
-      "static_path": "ui/dist",
-      "api_path": "/api",
-      "websocket_path": "/ws"
+    "overlaySupport": true,
+    "hotkey": "Ctrl+Shift+F",
+    "webPort": 7860,
+    "mcpEndpoint": "/gradio_api/mcp/sse",
+    "theme": {
+      "default": "system",
+      "options": ["light", "dark", "system"],
+      "customizable": true
     },
-    "overlay_config": {
-      "hotkey": "Ctrl+Shift+F",
-      "hotkey_platforms": {
-        "darwin": "Cmd+Shift+F",
-        "win32": "Ctrl+Shift+F",
-        "linux": "Ctrl+Shift+F"
-      },
-      "position": "center",
-      "size": { 
-        "width": 1000, 
-        "height": 700,
-        "min_width": 600,
-        "min_height": 400
-      },
-      "resizable": true,
-      "always_on_top": false,
-      "transparent": false,
-      "opacity": 0.98,
-      "frame": true,
-      "titlebar": true,
-      "closable": true,
-      "minimizable": true,
-      "maximizable": true,
-      "show_in_taskbar": false,
-      "skip_taskbar": true,
-      "focus_on_show": true,
-      "center_on_show": true,
-      "remember_position": true,
-      "remember_size": true,
-      "animation": {
-        "show": "fadeIn",
-        "hide": "fadeOut",
-        "duration": 200
-      },
-      "themes": {
-        "light": "ui/themes/light.css",
-        "dark": "ui/themes/dark.css",
-        "auto": true
-      }
-    },
-    "communication": {
-      "type": "websocket",
-      "port": "${ui_port}",
-      "path": "/ws",
-      "heartbeat_interval": 30000,
-      "reconnect_attempts": 5,
-      "reconnect_delay": 1000
+    "responsive": true,
+    "accessibility": {
+      "keyboard": true,
+      "screenReader": true,
+      "highContrast": true
     },
     "features": {
-      "notifications": true,
-      "system_tray": true,
-      "global_search": true,
-      "quick_actions": true,
-      "drag_drop": true,
-      "file_access": true,
-      "clipboard_access": true,
-      "screenshot_capture": false
-    }
-  },
-  "tools": [
-    {
-      "name": "list_files",
-      "description": "List files in a directory with enhanced filtering and metadata",
-      "parameters": {
-        "path": "string",
-        "include_hidden": "boolean (optional)",
-        "filter_pattern": "string (optional)",
-        "include_metadata": "boolean (optional)"
-      },
-      "returns": "Enhanced file listing with metadata and security info"
-    },
-    {
-      "name": "read_file",
-      "description": "Read file contents with encoding detection and size limits",
-      "parameters": {
-        "path": "string",
-        "encoding": "string (optional)",
-        "max_size": "number (optional)"
-      },
-      "returns": "File contents with metadata and encoding info"
-    },
-    {
-      "name": "get_file_info",
-      "description": "Get comprehensive information about a file or directory",
-      "parameters": {
-        "path": "string",
-        "include_permissions": "boolean (optional)",
-        "include_checksums": "boolean (optional)"
-      },
-      "returns": "Detailed file information including permissions and checksums"
-    },
-    {
-      "name": "create_directory",
-      "description": "Create a new directory with proper permissions",
-      "parameters": {
-        "path": "string",
-        "parents": "boolean (optional)",
-        "permissions": "string (optional)"
-      },
-      "returns": "Directory creation result with permissions info"
-    },
-    {
-      "name": "delete_file",
-      "description": "Safely delete a file or directory",
-      "parameters": {
-        "path": "string",
-        "recursive": "boolean (optional)",
-        "confirm": "boolean (optional)"
-      },
-      "returns": "Deletion result with safety checks"
-    },
-    {
-      "name": "copy_file",
-      "description": "Copy files or directories with progress tracking",
-      "parameters": {
-        "source": "string",
-        "destination": "string",
-        "overwrite": "boolean (optional)",
-        "preserve_metadata": "boolean (optional)"
-      },
-      "returns": "Copy operation result with progress info"
-    },
-    {
-      "name": "move_file",
-      "description": "Move or rename files and directories",
-      "parameters": {
-        "source": "string",
-        "destination": "string",
-        "overwrite": "boolean (optional)"
-      },
-      "returns": "Move operation result"
-    },
-    {
-      "name": "search_files",
-      "description": "Search for files using various criteria",
-      "parameters": {
-        "path": "string",
-        "pattern": "string",
-        "content_search": "boolean (optional)",
-        "case_sensitive": "boolean (optional)"
-      },
-      "returns": "Search results with relevance scoring"
-    }
-  ],
-  "user_config": {
-    "workspace_directory": {
-      "type": "directory",
-      "title": "Workspace Directory",
-      "description": "Primary directory for file operations",
-      "default": "${HOME}/Documents",
-      "required": true,
-      "validation": {
-        "must_exist": false,
-        "create_if_missing": true,
-        "permissions": ["read", "write"]
-      }
-    },
-    "debug_mode": {
-      "type": "boolean",
-      "title": "Debug Mode",
-      "description": "Enable verbose logging and debug features",
-      "default": false,
-      "required": false
-    },
-    "max_file_size": {
-      "type": "number",
-      "title": "Maximum File Size (MB)",
-      "description": "Maximum size for file operations",
-      "default": 100,
-      "min": 1,
-      "max": 1000,
-      "required": false
-    },
-    "log_level": {
-      "type": "select",
-      "title": "Log Level",
-      "description": "Logging verbosity level",
-      "default": "info",
-      "options": [
-        { "value": "error", "label": "Error Only" },
-        { "value": "warn", "label": "Warnings" },
-        { "value": "info", "label": "Information" },
-        { "value": "debug", "label": "Debug" }
-      ],
-      "required": false
-    },
-    "theme": {
-      "type": "select",
-      "title": "Interface Theme",
-      "description": "Visual theme for the user interface",
-      "default": "auto",
-      "options": [
-        { "value": "light", "label": "Light Theme" },
-        { "value": "dark", "label": "Dark Theme" },
-        { "value": "auto", "label": "Follow System" }
-      ],
-      "required": false
-    },
-    "show_hidden_files": {
-      "type": "boolean",
-      "title": "Show Hidden Files",
-      "description": "Display hidden files and directories",
-      "default": false,
-      "required": false
-    },
-    "enable_checksums": {
-      "type": "boolean",
-      "title": "Enable File Checksums",
-      "description": "Calculate and display file checksums",
-      "default": false,
-      "required": false
-    },
-    "backup_on_delete": {
-      "type": "boolean",
-      "title": "Backup on Delete",
-      "description": "Create backups when deleting files",
-      "default": true,
-      "required": false
+      "dragDrop": true,
+      "contextMenu": true,
+      "filePreview": true,
+      "bulkOperations": true,
+      "realTimeUpdates": true,
+      "searchHighlight": true
     }
   },
   "capabilities": {
-    "version": "1.0",
-    "security_level": "standard",
-    "risk_assessment": "medium",
-    "audit_required": false,
-    "file_system": {
-      "read_access": [
-        {
-          "path": "${user_config.workspace_directory}",
-          "recursive": true,
-          "reason": "Primary workspace for file management operations",
-          "required": true,
-          "user_configurable": true,
-          "file_types": ["*"],
-          "exclude_patterns": ["*.tmp", ".git/*", "node_modules/*"],
-          "max_file_size": "${user_config.max_file_size}MB"
-        },
-        {
-          "path": "${HOME}/.config/FileManagerMCP",
-          "recursive": true,
-          "reason": "Store application configuration and preferences",
-          "required": true,
-          "user_configurable": false,
-          "file_types": ["json", "config", "log"],
-          "security_level": "high"
-        }
-      ],
-      "write_access": [
-        {
-          "path": "${user_config.workspace_directory}",
-          "recursive": true,
-          "reason": "Create, modify, and delete files in workspace",
-          "required": true,
-          "user_configurable": true,
-          "max_file_size": "${user_config.max_file_size}MB",
-          "quota": "10GB",
-          "backup_strategy": "versioned"
-        },
-        {
-          "path": "${HOME}/.config/FileManagerMCP",
-          "recursive": true,
-          "reason": "Save configuration and cache data",
-          "required": true,
-          "user_configurable": false,
-          "encryption": "AES-256"
-        }
-      ],
-      "execute_access": [],
-      "watch_access": [
-        {
-          "path": "${user_config.workspace_directory}",
-          "recursive": true,
-          "reason": "Monitor file changes for real-time updates",
-          "required": false,
-          "user_configurable": true,
-          "events": ["created", "modified", "deleted"],
-          "debounce": 500,
-          "max_depth": 10
-        }
-      ]
+    "fileSystem": {
+      "read": true,
+      "write": true,
+      "delete": true,
+      "create": true,
+      "move": true,
+      "copy": true,
+      "search": true,
+      "metadata": true,
+      "permissions": true,
+      "checksums": true,
+      "backup": true
     },
     "network": {
-      "outbound_connections": [],
-      "inbound_connections": [
-        {
-          "interfaces": ["localhost", "127.0.0.1"],
-          "protocols": ["http", "websocket"],
-          "ports": ["${ui_port}", "${mcp_port}"],
-          "reason": "Serve dual UI interface and handle MCP communication",
-          "required": true,
-          "security": "localhost_only",
-          "cors_origins": ["mcp-store://"]
-        }
-      ],
-      "proxy_support": {
-        "http_proxy": false,
-        "https_proxy": false,
-        "socks_proxy": false
-      },
-      "offline_mode": {
-        "supported": true,
-        "cached_operations": ["file_operations", "directory_listing"],
-        "sync_on_reconnect": false
-      }
+      "http": true,
+      "websocket": true,
+      "cors": true,
+      "ssl": false
     },
-    "system_integration": {
-      "notifications": {
-        "enabled": true,
-        "types": ["desktop", "badge"],
-        "reason": "Notify users of file operation completion and errors",
-        "required": false,
-        "user_configurable": true,
-        "categories": [
-          {
-            "id": "operations",
-            "name": "File Operations",
-            "priority": "medium",
-            "sound": false,
-            "reason": "File operation completion notifications"
-          },
-          {
-            "id": "errors",
-            "name": "Error Notifications",
-            "priority": "high",
-            "sound": true,
-            "reason": "Critical error notifications"
-          }
-        ]
-      },
-      "clipboard": {
-        "read": true,
-        "write": true,
-        "reason": "Copy file paths and contents to clipboard",
-        "required": false,
-        "user_configurable": true,
-        "data_types": ["text", "file_paths"]
-      },
-      "global_shortcuts": {
-        "enabled": true,
-        "shortcuts": [
-          {
-            "key": "Ctrl+Shift+F",
-            "action": "show_overlay",
-            "reason": "Quick access to file manager overlay",
-            "user_configurable": true,
-            "global": true
-          }
-        ]
-      },
-      "window_management": {
-        "always_on_top": false,
-        "focus_stealing": false,
-        "window_positioning": true,
-        "reason": "Manage overlay window behavior",
-        "minimize_to_tray": true
-      }
+    "system": {
+      "processManagement": false,
+      "environmentAccess": true,
+      "logging": true,
+      "configuration": true,
+      "monitoring": true
     },
-    "process_access": {
-      "running_processes": {
-        "list": false,
-        "details": false
-      },
-      "system_information": {
-        "os_version": true,
-        "memory_info": true,
-        "cpu_info": false,
-        "reason": "Optimize performance based on system capabilities",
-        "usage": "performance_optimization"
-      },
-      "environment_variables": {
-        "read": ["HOME", "TEMP", "APPDATA", "PATH"],
-        "write": [],
-        "reason": "Locate system directories and configuration paths"
-      }
+    "ui": {
+      "gradio": true,
+      "overlay": true,
+      "hotkeys": true,
+      "themes": true,
+      "responsive": true,
+      "accessibility": true
     },
-    "cryptography": {
-      "encryption": {
-        "symmetric": ["AES-256"],
-        "reason": "Encrypt sensitive configuration data",
-        "key_storage": "os_keychain"
-      },
-      "hashing": {
-        "algorithms": ["SHA-256", "MD5"],
-        "reason": "File integrity verification and checksums",
-        "salt_generation": true
-      }
-    },
-    "background_processing": {
-      "enabled": true,
-      "wake_system": false,
-      "prevent_sleep": false,
-      "reason": "Monitor file system changes and cleanup tasks",
-      "tasks": [
-        {
-          "name": "file_watcher",
-          "interval": 1000,
-          "reason": "Watch for file system changes"
-        },
-        {
-          "name": "cache_cleanup",
-          "interval": 3600000,
-          "reason": "Clean up temporary files and cache"
-        }
-      ]
+    "integration": {
+      "mcp": true,
+      "mcpStreaming": true,
+      "overlaySystem": true,
+      "chatAgent": true,
+      "realTimeSync": true
     }
   },
-  "store_metadata": {
-    "category": "file-management",
-    "subcategories": ["file-operations", "directory-management", "file-browser"],
-    "tags": ["files", "directory", "python", "management", "filesystem", "dual-ui"],
-    "pricing_model": "free",
-    "external_dependencies": [
-      {
-        "name": "Python",
-        "version": ">=3.8.0",
-        "optional": false,
-        "bundled": false
-      }
-    ],
-    "system_requirements": {
-      "minimum_ram": "256MB",
-      "recommended_ram": "512MB",
-      "disk_space": "50MB",
-      "network_required": false
+  "configuration": {
+    "workspace_dir": {
+      "type": "string",
+      "default": ".",
+      "description": "Working directory for file operations",
+      "required": true,
+      "validation": "directory"
     },
-    "performance_metrics": {
-      "startup_time": "<2s",
-      "memory_usage": "50-150MB",
-      "cpu_usage": "low",
-      "battery_impact": "minimal"
-    }
-  },
-  "compatibility": {
-    "claude_desktop": ">=0.10.0",
-    "mcp_store": ">=1.0.0",
-    "platforms": ["darwin", "win32", "linux"],
-    "architectures": ["x64", "arm64"],
-    "runtimes": {
-      "python": ">=3.8.0 <4"
+    "debug_mode": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable debug logging and verbose output"
     },
-    "system_versions": {
-      "darwin": ">=10.15",
-      "win32": ">=10.0.17763",
-      "linux": "kernel >=4.4"
+    "max_file_size": {
+      "type": "integer",
+      "default": 10485760,
+      "description": "Maximum file size in bytes (10MB default)",
+      "min": 1024,
+      "max": 104857600
+    },
+    "log_level": {
+      "type": "string",
+      "default": "INFO",
+      "description": "Logging level",
+      "enum": ["DEBUG", "INFO", "WARNING", "ERROR"]
+    },
+    "theme": {
+      "type": "string",
+      "default": "system",
+      "description": "UI theme preference",
+      "enum": ["light", "dark", "system"]
+    },
+    "show_hidden_files": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show hidden files and directories by default"
+    },
+    "enable_checksums": {
+      "type": "boolean",
+      "default": true,
+      "description": "Calculate and display file checksums"
+    },
+    "auto_backup": {
+      "type": "boolean",
+      "default": true,
+      "description": "Automatically backup files before modification"
+    },
+    "ui_port": {
+      "type": "integer",
+      "default": 7860,
+      "description": "Port for the Gradio web interface",
+      "min": 1024,
+      "max": 65535
     }
   },
   "security": {
     "sandboxing": {
       "enabled": true,
-      "level": "strict",
-      "escape_prevention": true,
-      "capability_enforcement": true
+      "description": "All file operations are sandboxed to the workspace directory"
     },
-    "integrity_checks": {
-      "file_hashing": true,
-      "runtime_verification": true,
-      "capability_validation": true
+    "capabilities": {
+      "enforced": true,
+      "description": "Capability-based security model enforced"
+    },
+    "validation": {
+      "pathValidation": true,
+      "inputSanitization": true,
+      "sizeChecks": true,
+      "typeChecking": true
+    },
+    "audit": {
+      "enabled": true,
+      "logLevel": "INFO",
+      "description": "All file operations are logged for audit purposes"
     }
   },
-  "keywords": ["file", "directory", "python", "management", "filesystem", "dual-ui", "overlay"],
-  "license": "MIT",
-  "copyright": "© 2025 Anthropic Inc. All rights reserved."
+  "store": {
+    "category": "file-management",
+    "subcategory": "utilities",
+    "tags": ["file-manager", "productivity", "development", "gradio", "mcp"],
+    "maturity": "stable",
+    "pricing": {
+      "model": "free",
+      "cost": 0
+    },
+    "support": {
+      "documentation": "README.md",
+      "issues": "https://github.com/compactmind/test/issues",
+      "community": "https://discord.gg/compactmind"
+    },
+    "compatibility": {
+      "platforms": ["windows", "macos", "linux"],
+      "architectures": ["x86_64", "arm64"],
+      "containers": ["docker", "podman"]
+    },
+    "performance": {
+      "memory": "< 100MB",
+      "cpu": "< 5%",
+      "disk": "< 10MB",
+      "network": "< 1MB/s"
+    },
+    "dependencies": {
+      "system": ["python>=3.8"],
+      "python": ["gradio>=4.0.0", "mcp>=0.1.0"],
+      "optional": ["docker"]
+    }
+  },
+  "gradio": {
+    "version": "4.0.0",
+    "interface": "blocks",
+    "mcp_server": true,
+    "endpoint": "/gradio_api/mcp/sse",
+    "features": {
+      "tabs": true,
+      "fileOperations": true,
+      "search": true,
+      "configuration": true,
+      "realTimeUpdates": true,
+      "streaming": true
+    },
+    "themes": {
+      "default": "soft",
+      "customizable": true,
+      "responsive": true
+    },
+    "accessibility": {
+      "keyboard": true,
+      "screenReader": true,
+      "highContrast": true
+    }
+  },
+  "mcp": {
+    "protocol": "sse",
+    "endpoint": "/gradio_api/mcp/sse",
+    "streaming": true,
+    "tools": [
+      {
+        "name": "list_files",
+        "description": "List files and directories in the specified directory",
+        "parameters": ["directory", "show_hidden", "file_type"]
+      },
+      {
+        "name": "read_file",
+        "description": "Read the contents of a file",
+        "parameters": ["file_path", "encoding"]
+      },
+      {
+        "name": "write_file",
+        "description": "Write content to a file",
+        "parameters": ["file_path", "content", "encoding", "create_backup"]
+      },
+      {
+        "name": "delete_file",
+        "description": "Delete a file or directory",
+        "parameters": ["file_path", "create_backup"]
+      },
+      {
+        "name": "copy_file",
+        "description": "Copy a file or directory",
+        "parameters": ["source_path", "destination_path", "overwrite"]
+      },
+      {
+        "name": "move_file",
+        "description": "Move a file or directory",
+        "parameters": ["source_path", "destination_path", "overwrite"]
+      },
+      {
+        "name": "create_directory",
+        "description": "Create a new directory",
+        "parameters": ["directory_path", "create_parents"]
+      },
+      {
+        "name": "search_files",
+        "description": "Search for files by name and optionally content",
+        "parameters": ["query", "directory", "search_content", "file_extensions"]
+      },
+      {
+        "name": "get_file_info",
+        "description": "Get detailed information about a file or directory",
+        "parameters": ["file_path"]
+      },
+      {
+        "name": "get_config",
+        "description": "Get current configuration settings",
+        "parameters": []
+      },
+      {
+        "name": "update_config",
+        "description": "Update configuration settings",
+        "parameters": ["workspace_dir", "debug_mode", "max_file_size", "log_level", "theme", "show_hidden_files", "enable_checksums", "auto_backup"]
+      }
+    ]
+  },
+  "overlay": {
+    "compatible": true,
+    "hotkey": "Ctrl+Shift+F",
+    "position": "center",
+    "size": {
+      "width": 900,
+      "height": 700,
+      "resizable": true
+    },
+    "features": {
+      "draggable": true,
+      "resizable": true,
+      "minimizable": true,
+      "closable": true,
+      "alwaysOnTop": false
+    },
+    "integration": {
+      "chatAgent": true,
+      "streaming": true,
+      "contextAware": true,
+      "realTimeSync": true
+    }
+  },
+  "installation": {
+    "method": "script",
+    "script": "install.sh",
+    "requirements": ["python>=3.8", "pip"],
+    "steps": [
+      "Check Python version",
+      "Install Python dependencies",
+      "Create workspace directory",
+      "Configure system integration",
+      "Verify installation"
+    ],
+    "postInstall": {
+      "commands": ["python server/main.py --help"],
+      "verification": "curl -s http://localhost:7860/gradio_api/mcp/sse"
+    }
+  },
+  "usage": {
+    "web": "http://localhost:7860",
+    "mcp": "http://localhost:7860/gradio_api/mcp/sse",
+    "cli": "python server/main.py --help",
+    "examples": [
+      {
+        "name": "Basic usage",
+        "command": "python server/main.py --workspace /path/to/workspace"
+      },
+      {
+        "name": "Debug mode",
+        "command": "python server/main.py --debug --log-level DEBUG"
+      },
+      {
+        "name": "Custom port",
+        "command": "python server/main.py --port 8080"
+      },
+      {
+        "name": "Shared access",
+        "command": "python server/main.py --share"
+      }
+    ]
+  },
+  "testing": {
+    "unit": "pytest tests/",
+    "integration": "pytest tests/integration/",
+    "coverage": "pytest --cov=server tests/",
+    "performance": "pytest tests/performance/"
+  },
+  "monitoring": {
+    "healthCheck": "/health",
+    "metrics": "/metrics",
+    "logs": "file_manager.log"
+  }
 }

@@ -1,684 +1,830 @@
 #!/usr/bin/env python3
+"""
+Enhanced DXT File Manager MCP Server with Gradio
+Provides both web UI and MCP server endpoints for file operations
+"""
 
-import os
-import sys
+import gradio as gr
 import json
-import hashlib
+import os
 import shutil
+import hashlib
 import logging
-import asyncio
 import argparse
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from mcp.server.fastmcp import FastMCP
-import websockets
-import socket
-from http.server import HTTPServer, SimpleHTTPRequestHandler
-from threading import Thread
+import sys
 import time
-
-# Parse command line arguments
-parser = argparse.ArgumentParser(description="Enhanced File Manager MCP Server with Dual UI")
-parser.add_argument(
-    "--workspace", default=os.path.expanduser("~/Documents"), help="Workspace directory"
-)
-parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-parser.add_argument("--ui-port", type=int, default=8080, help="UI server port")
-parser.add_argument("--max-file-size", type=int, default=100, help="Maximum file size in MB")
-parser.add_argument("--log-level", default="info", choices=["error", "warn", "info", "debug"], help="Log level")
-args = parser.parse_args()
-
-# Configure logging
-log_level = getattr(logging, args.log_level.upper())
-logging.basicConfig(
-    level=log_level,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stderr),
-        logging.FileHandler(os.path.expanduser("~/.config/FileManagerMCP/server.log"))
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Initialize enhanced server
-mcp = FastMCP("file-manager-python-enhanced")
+import mimetypes
+import subprocess
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Union
+from dataclasses import dataclass, asdict
+import tempfile
+import asyncio
+import uuid
 
 # Configuration management
+@dataclass
+class Config:
+    workspace_dir: str = "."
+    debug_mode: bool = False
+    max_file_size: int = 10 * 1024 * 1024  # 10MB
+    log_level: str = "INFO"
+    theme: str = "system"
+    show_hidden_files: bool = False
+    enable_checksums: bool = True
+    auto_backup: bool = True
+    backup_dir: str = ".backups"
+    ui_port: int = 7860
+    mcp_enabled: bool = True
+
 class ConfigManager:
-    def __init__(self):
-        self.config_dir = Path.home() / ".config" / "FileManagerMCP"
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.config_file = self.config_dir / "config.json"
-        self.load_config()
+    def __init__(self, config_file: str = "config.json"):
+        self.config_file = config_file
+        self.config = self._load_config()
     
-    def load_config(self):
-        """Load configuration from file"""
-        try:
-            if self.config_file.exists():
+    def _load_config(self) -> Config:
+        """Load configuration from file or create default"""
+        if os.path.exists(self.config_file):
+            try:
                 with open(self.config_file, 'r') as f:
-                    self.config = json.load(f)
-            else:
-                self.config = self.get_default_config()
-                self.save_config()
-        except Exception as e:
-            logger.error(f"Failed to load config: {e}")
-            self.config = self.get_default_config()
+                    data = json.load(f)
+                return Config(**data)
+            except Exception as e:
+                logging.warning(f"Failed to load config: {e}, using defaults")
+        return Config()
     
-    def get_default_config(self) -> Dict[str, Any]:
-        """Get default configuration"""
-        return {
-            "workspace_directory": args.workspace,
-            "debug_mode": args.debug,
-            "max_file_size": args.max_file_size,
-            "log_level": args.log_level,
-            "theme": "auto",
-            "show_hidden_files": False,
-            "enable_checksums": False,
-            "backup_on_delete": True,
-            "ui_port": args.ui_port
-        }
-    
-    def save_config(self):
-        """Save configuration to file"""
+    def save_config(self) -> None:
+        """Save current configuration to file"""
         try:
             with open(self.config_file, 'w') as f:
-                json.dump(self.config, f, indent=2)
+                json.dump(asdict(self.config), f, indent=2)
         except Exception as e:
-            logger.error(f"Failed to save config: {e}")
+            logging.error(f"Failed to save config: {e}")
     
-    def get(self, key: str, default=None):
-        """Get configuration value"""
-        return self.config.get(key, default)
-    
-    def set(self, key: str, value: Any):
-        """Set configuration value"""
-        self.config[key] = value
+    def update_config(self, **kwargs) -> Dict[str, Any]:
+        """Update configuration with new values"""
+        for key, value in kwargs.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
         self.save_config()
+        return asdict(self.config)
 
-# Initialize configuration manager
+# Global configuration manager
 config_manager = ConfigManager()
 
-# Utility functions
-def get_file_checksum(file_path: Path, algorithm: str = "sha256") -> str:
-    """Calculate file checksum"""
-    hash_obj = hashlib.new(algorithm)
+# Security utilities
+def is_safe_path(path: str, workspace: str) -> bool:
+    """Check if path is within workspace directory"""
     try:
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_obj.update(chunk)
-        return hash_obj.hexdigest()
-    except Exception as e:
-        logger.error(f"Failed to calculate checksum for {file_path}: {e}")
-        return ""
-
-def format_file_size(size_bytes: int) -> str:
-    """Format file size in human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} TB"
-
-def check_file_permissions(file_path: Path) -> Dict[str, bool]:
-    """Check file permissions"""
-    return {
-        "readable": os.access(file_path, os.R_OK),
-        "writable": os.access(file_path, os.W_OK),
-        "executable": os.access(file_path, os.X_OK)
-    }
-
-def is_safe_path(workspace: Path, target: Path) -> bool:
-    """Check if target path is within workspace (security check)"""
-    try:
-        workspace.resolve().relative_to(workspace.resolve())
-        target.resolve().relative_to(workspace.resolve())
-        return True
-    except ValueError:
+        workspace_path = Path(workspace).resolve()
+        target_path = Path(path).resolve()
+        return target_path.is_relative_to(workspace_path)
+    except Exception:
         return False
 
-# Enhanced MCP Tools
-@mcp.tool()
-def list_files(path: str, include_hidden: bool = False, filter_pattern: str = None, include_metadata: bool = False) -> str:
-    """List files in a directory with enhanced filtering and metadata"""
+def get_safe_path(path: str, workspace: str) -> Path:
+    """Get safe path within workspace"""
+    if not is_safe_path(path, workspace):
+        raise ValueError(f"Path {path} is outside workspace {workspace}")
+    return Path(path).resolve()
+
+def create_backup(file_path: str) -> Optional[str]:
+    """Create backup of file before modification"""
+    if not config_manager.config.auto_backup:
+        return None
+    
     try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
+        backup_dir = Path(config_manager.config.backup_dir)
+        backup_dir.mkdir(exist_ok=True)
         
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        timestamp = int(time.time())
+        backup_name = f"{Path(file_path).name}_{timestamp}"
+        backup_path = backup_dir / backup_name
         
-        if not path_obj.exists():
-            return json.dumps({"error": f"Directory not found: {path}"})
+        shutil.copy2(file_path, backup_path)
+        return str(backup_path)
+    except Exception as e:
+        logging.error(f"Failed to create backup: {e}")
+        return None
 
-        if not path_obj.is_dir():
-            return json.dumps({"error": f"Path is not a directory: {path}"})
+def calculate_checksum(file_path: str) -> Optional[str]:
+    """Calculate SHA256 checksum of file"""
+    if not config_manager.config.enable_checksums:
+        return None
+    
+    try:
+        with open(file_path, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        return None
 
-        files = []
-        for item in path_obj.iterdir():
-            # Skip hidden files if not requested
-            if not include_hidden and item.name.startswith('.'):
+# File operation functions for Gradio/MCP
+def list_files(directory: str = ".", show_hidden: bool = False, file_type: str = "all") -> List[Dict[str, Any]]:
+    """
+    List files and directories in the specified directory.
+    
+    Args:
+        directory: The directory path to list (default: current directory)
+        show_hidden: Whether to show hidden files (default: False)
+        file_type: Filter by file type: 'all', 'files', 'directories' (default: 'all')
+    
+    Returns:
+        List of file/directory information dictionaries
+    """
+    try:
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(directory, workspace)
+        
+        if not safe_path.exists():
+            return [{"error": f"Directory {directory} does not exist"}]
+        
+        if not safe_path.is_dir():
+            return [{"error": f"{directory} is not a directory"}]
+        
+        items = []
+        for item in safe_path.iterdir():
+            if not show_hidden and item.name.startswith('.'):
                 continue
-            
-            # Apply filter pattern if provided
-            if filter_pattern and filter_pattern not in item.name:
-                continue
-            
-            file_info = {
+                
+            item_info = {
                 "name": item.name,
+                "path": str(item.relative_to(Path(workspace))),
                 "type": "directory" if item.is_dir() else "file",
-                "path": str(item)
+                "size": item.stat().st_size if item.is_file() else 0,
+                "modified": item.stat().st_mtime,
+                "permissions": oct(item.stat().st_mode)[-3:],
+                "checksum": calculate_checksum(str(item)) if item.is_file() else None
             }
             
-            if include_metadata:
-                try:
-                    stat_info = item.stat()
-                    file_info.update({
-                        "size": stat_info.st_size,
-                        "size_formatted": format_file_size(stat_info.st_size),
-                        "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-                        "created": datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
-                        "permissions": check_file_permissions(item)
-                    })
-                    
-                    if config_manager.get("enable_checksums") and item.is_file():
-                        file_info["checksum"] = get_file_checksum(item)
-                
-                except Exception as e:
-                    logger.warning(f"Failed to get metadata for {item}: {e}")
-            
-            files.append(file_info)
+            if file_type == "all" or \
+               (file_type == "files" and item.is_file()) or \
+               (file_type == "directories" and item.is_dir()):
+                items.append(item_info)
         
-        result = {
-            "success": True,
-            "path": path,
-            "files": files,
-            "total_count": len(files)
-        }
+        return sorted(items, key=lambda x: (x["type"], x["name"]))
         
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied accessing: {path}"})
     except Exception as e:
-        logger.error(f"Error listing directory {path}: {e}")
-        return json.dumps({"error": f"Error listing directory: {str(e)}"})
+        logging.error(f"Error listing files: {e}")
+        return [{"error": str(e)}]
 
-@mcp.tool()
-def read_file(path: str, encoding: str = "utf-8", max_size: int = None) -> str:
-    """Read file contents with encoding detection and size limits"""
+def read_file(file_path: str, encoding: str = "utf-8") -> Dict[str, Any]:
+    """
+    Read the contents of a file.
+    
+    Args:
+        file_path: Path to the file to read
+        encoding: Text encoding to use (default: utf-8)
+    
+    Returns:
+        Dictionary containing file content and metadata
+    """
     try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(file_path, workspace)
         
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        if not safe_path.exists():
+            return {"error": f"File {file_path} does not exist"}
         
-        if not path_obj.exists():
-            return json.dumps({"error": f"File not found: {path}"})
-
-        if not path_obj.is_file():
-            return json.dumps({"error": f"Path is not a file: {path}"})
-
-        # Check file size limits
-        file_size = path_obj.stat().st_size
-        max_size_bytes = (max_size or config_manager.get("max_file_size", 100)) * 1024 * 1024
+        if not safe_path.is_file():
+            return {"error": f"{file_path} is not a file"}
         
-        if file_size > max_size_bytes:
-            return json.dumps({
-                "error": f"File too large: {format_file_size(file_size)} exceeds limit of {format_file_size(max_size_bytes)}"
-            })
-
-        with path_obj.open("r", encoding=encoding) as f:
+        file_size = safe_path.stat().st_size
+        if file_size > config_manager.config.max_file_size:
+            return {"error": f"File too large ({file_size} bytes > {config_manager.config.max_file_size} bytes)"}
+        
+        # Detect encoding if not specified
+        if encoding == "auto":
+            try:
+                with open(safe_path, 'rb') as f:
+                    raw_data = f.read(1024)
+                    encoding = 'utf-8'  # Default fallback
+            except Exception:
+                encoding = 'utf-8'
+        
+        with open(safe_path, 'r', encoding=encoding) as f:
             content = f.read()
-
-        result = {
-            "success": True,
-            "path": path,
+        
+        return {
             "content": content,
             "size": file_size,
-            "size_formatted": format_file_size(file_size),
             "encoding": encoding,
-            "lines": len(content.splitlines())
+            "checksum": calculate_checksum(str(safe_path)),
+            "mime_type": mimetypes.guess_type(str(safe_path))[0],
+            "modified": safe_path.stat().st_mtime
         }
         
-        if config_manager.get("enable_checksums"):
-            result["checksum"] = get_file_checksum(path_obj)
-        
-        return json.dumps(result, indent=2)
-
     except UnicodeDecodeError:
-        return json.dumps({"error": f"File is not text or uses unsupported encoding: {path}"})
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied reading: {path}"})
+        return {"error": f"Unable to decode file with {encoding} encoding"}
     except Exception as e:
-        logger.error(f"Error reading file {path}: {e}")
-        return json.dumps({"error": f"Error reading file: {str(e)}"})
+        logging.error(f"Error reading file: {e}")
+        return {"error": str(e)}
 
-@mcp.tool()
-def get_file_info(path: str, include_permissions: bool = True, include_checksums: bool = False) -> str:
-    """Get comprehensive information about a file or directory"""
+def write_file(file_path: str, content: str, encoding: str = "utf-8", create_backup: bool = True) -> Dict[str, Any]:
+    """
+    Write content to a file.
+    
+    Args:
+        file_path: Path to the file to write
+        content: Content to write to the file
+        encoding: Text encoding to use (default: utf-8)
+        create_backup: Whether to create a backup if file exists (default: True)
+    
+    Returns:
+        Dictionary containing operation result and metadata
+    """
     try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(file_path, workspace)
         
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        # Create backup if file exists
+        backup_path = None
+        if safe_path.exists() and create_backup:
+            backup_path = create_backup(str(safe_path))
         
-        if not path_obj.exists():
-            return json.dumps({"error": f"Path not found: {path}"})
-
-        stat_info = path_obj.stat()
-        file_type = "directory" if path_obj.is_dir() else "file"
-
-        result = {
+        # Create parent directories if they don't exist
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(safe_path, 'w', encoding=encoding) as f:
+            f.write(content)
+        
+        return {
             "success": True,
-            "path": path,
-            "name": path_obj.name,
-            "type": file_type,
-            "size": stat_info.st_size,
-            "size_formatted": format_file_size(stat_info.st_size),
-            "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-            "created": datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
-            "accessed": datetime.fromtimestamp(stat_info.st_atime).isoformat()
+            "path": str(safe_path.relative_to(Path(workspace))),
+            "size": len(content.encode(encoding)),
+            "encoding": encoding,
+            "backup_path": backup_path,
+            "checksum": calculate_checksum(str(safe_path))
         }
         
-        if include_permissions:
-            result["permissions"] = check_file_permissions(path_obj)
-        
-        if include_checksums and path_obj.is_file():
-            result["checksums"] = {
-                "sha256": get_file_checksum(path_obj, "sha256"),
-                "md5": get_file_checksum(path_obj, "md5")
-            }
-        
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied accessing: {path}"})
     except Exception as e:
-        logger.error(f"Error getting file info for {path}: {e}")
-        return json.dumps({"error": f"Error getting file info: {str(e)}"})
+        logging.error(f"Error writing file: {e}")
+        return {"error": str(e)}
 
-@mcp.tool()
-def create_directory(path: str, parents: bool = True, permissions: str = "755") -> str:
-    """Create a new directory with proper permissions"""
+def delete_file(file_path: str, create_backup: bool = True) -> Dict[str, Any]:
+    """
+    Delete a file or directory.
+    
+    Args:
+        file_path: Path to the file or directory to delete
+        create_backup: Whether to create a backup before deletion (default: True)
+    
+    Returns:
+        Dictionary containing operation result
+    """
     try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(file_path, workspace)
         
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        if not safe_path.exists():
+            return {"error": f"Path {file_path} does not exist"}
         
-        if path_obj.exists():
-            return json.dumps({"error": f"Directory already exists: {path}"})
+        # Create backup if requested and it's a file
+        backup_path = None
+        if safe_path.is_file() and create_backup:
+            backup_path = create_backup(str(safe_path))
         
-        path_obj.mkdir(parents=parents, exist_ok=False)
-        
-        # Set permissions if specified
-        if permissions:
-            os.chmod(path_obj, int(permissions, 8))
-        
-        result = {
-            "success": True,
-            "path": path,
-            "created": True,
-            "permissions": permissions
-        }
-        
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied creating directory: {path}"})
-    except Exception as e:
-        logger.error(f"Error creating directory {path}: {e}")
-        return json.dumps({"error": f"Error creating directory: {str(e)}"})
-
-@mcp.tool()
-def delete_file(path: str, recursive: bool = False, confirm: bool = False) -> str:
-    """Safely delete a file or directory"""
-    try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
-        
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
-        
-        if not path_obj.exists():
-            return json.dumps({"error": f"Path not found: {path}"})
-        
-        if not confirm:
-            return json.dumps({
-                "error": "Deletion requires confirmation. Set confirm=true to proceed.",
-                "path": path,
-                "type": "directory" if path_obj.is_dir() else "file"
-            })
-        
-        # Create backup if enabled
-        if config_manager.get("backup_on_delete", True):
-            backup_dir = workspace / ".backups"
-            backup_dir.mkdir(exist_ok=True)
-            backup_path = backup_dir / f"{path_obj.name}.{int(time.time())}.bak"
-            
-            if path_obj.is_file():
-                shutil.copy2(path_obj, backup_path)
-            else:
-                shutil.copytree(path_obj, backup_path)
-            
-            logger.info(f"Created backup at {backup_path}")
-        
-        # Delete the file/directory
-        if path_obj.is_file():
-            path_obj.unlink()
-        elif path_obj.is_dir():
-            if recursive:
-                shutil.rmtree(path_obj)
-            else:
-                path_obj.rmdir()
-        
-        result = {
-            "success": True,
-            "path": path,
-            "deleted": True,
-            "backup_created": config_manager.get("backup_on_delete", True)
-        }
-        
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied deleting: {path}"})
-    except OSError as e:
-        return json.dumps({"error": f"OS error deleting {path}: {str(e)}"})
-    except Exception as e:
-        logger.error(f"Error deleting {path}: {e}")
-        return json.dumps({"error": f"Error deleting: {str(e)}"})
-
-@mcp.tool()
-def copy_file(source: str, destination: str, overwrite: bool = False, preserve_metadata: bool = True) -> str:
-    """Copy files or directories with progress tracking"""
-    try:
-        source_obj = Path(source)
-        dest_obj = Path(destination)
-        workspace = Path(config_manager.get("workspace_directory"))
-        
-        # Security checks
-        if not is_safe_path(workspace, source_obj) or not is_safe_path(workspace, dest_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
-        
-        if not source_obj.exists():
-            return json.dumps({"error": f"Source not found: {source}"})
-        
-        if dest_obj.exists() and not overwrite:
-            return json.dumps({"error": f"Destination exists and overwrite=false: {destination}"})
-        
-        # Perform copy operation
-        if source_obj.is_file():
-            if preserve_metadata:
-                shutil.copy2(source_obj, dest_obj)
-            else:
-                shutil.copy(source_obj, dest_obj)
+        if safe_path.is_dir():
+            shutil.rmtree(safe_path)
         else:
-            if dest_obj.exists():
-                shutil.rmtree(dest_obj)
-            shutil.copytree(source_obj, dest_obj)
+            safe_path.unlink()
         
-        result = {
+        return {
             "success": True,
-            "source": source,
-            "destination": destination,
-            "copied": True,
-            "preserve_metadata": preserve_metadata
+            "path": str(safe_path.relative_to(Path(workspace))),
+            "backup_path": backup_path,
+            "type": "directory" if safe_path.is_dir() else "file"
         }
         
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied copying from {source} to {destination}"})
     except Exception as e:
-        logger.error(f"Error copying {source} to {destination}: {e}")
-        return json.dumps({"error": f"Error copying: {str(e)}"})
+        logging.error(f"Error deleting file: {e}")
+        return {"error": str(e)}
 
-@mcp.tool()
-def move_file(source: str, destination: str, overwrite: bool = False) -> str:
-    """Move or rename files and directories"""
+def copy_file(source_path: str, destination_path: str, overwrite: bool = False) -> Dict[str, Any]:
+    """
+    Copy a file or directory.
+    
+    Args:
+        source_path: Path to the source file or directory
+        destination_path: Path to the destination
+        overwrite: Whether to overwrite existing files (default: False)
+    
+    Returns:
+        Dictionary containing operation result
+    """
     try:
-        source_obj = Path(source)
-        dest_obj = Path(destination)
-        workspace = Path(config_manager.get("workspace_directory"))
+        workspace = config_manager.config.workspace_dir
+        safe_source = get_safe_path(source_path, workspace)
+        safe_dest = get_safe_path(destination_path, workspace)
         
-        # Security checks
-        if not is_safe_path(workspace, source_obj) or not is_safe_path(workspace, dest_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        if not safe_source.exists():
+            return {"error": f"Source {source_path} does not exist"}
         
-        if not source_obj.exists():
-            return json.dumps({"error": f"Source not found: {source}"})
+        if safe_dest.exists() and not overwrite:
+            return {"error": f"Destination {destination_path} already exists"}
         
-        if dest_obj.exists() and not overwrite:
-            return json.dumps({"error": f"Destination exists and overwrite=false: {destination}"})
+        if safe_source.is_dir():
+            shutil.copytree(safe_source, safe_dest, dirs_exist_ok=overwrite)
+        else:
+            safe_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(safe_source, safe_dest)
         
-        # Perform move operation
-        if dest_obj.exists():
-            if dest_obj.is_dir():
-                shutil.rmtree(dest_obj)
-            else:
-                dest_obj.unlink()
-        
-        shutil.move(str(source_obj), str(dest_obj))
-        
-        result = {
+        return {
             "success": True,
-            "source": source,
-            "destination": destination,
-            "moved": True
+            "source": str(safe_source.relative_to(Path(workspace))),
+            "destination": str(safe_dest.relative_to(Path(workspace))),
+            "type": "directory" if safe_source.is_dir() else "file",
+            "size": safe_source.stat().st_size if safe_source.is_file() else 0
         }
         
-        return json.dumps(result, indent=2)
-
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied moving from {source} to {destination}"})
     except Exception as e:
-        logger.error(f"Error moving {source} to {destination}: {e}")
-        return json.dumps({"error": f"Error moving: {str(e)}"})
+        logging.error(f"Error copying file: {e}")
+        return {"error": str(e)}
 
-@mcp.tool()
-def search_files(path: str, pattern: str, content_search: bool = False, case_sensitive: bool = False) -> str:
-    """Search for files using various criteria"""
+def move_file(source_path: str, destination_path: str, overwrite: bool = False) -> Dict[str, Any]:
+    """
+    Move a file or directory.
+    
+    Args:
+        source_path: Path to the source file or directory
+        destination_path: Path to the destination
+        overwrite: Whether to overwrite existing files (default: False)
+    
+    Returns:
+        Dictionary containing operation result
+    """
     try:
-        path_obj = Path(path)
-        workspace = Path(config_manager.get("workspace_directory"))
+        workspace = config_manager.config.workspace_dir
+        safe_source = get_safe_path(source_path, workspace)
+        safe_dest = get_safe_path(destination_path, workspace)
         
-        # Security check
-        if not is_safe_path(workspace, path_obj):
-            return json.dumps({"error": "Access denied: Path outside workspace"})
+        if not safe_source.exists():
+            return {"error": f"Source {source_path} does not exist"}
         
-        if not path_obj.exists():
-            return json.dumps({"error": f"Search path not found: {path}"})
+        if safe_dest.exists() and not overwrite:
+            return {"error": f"Destination {destination_path} already exists"}
         
+        shutil.move(str(safe_source), str(safe_dest))
+        
+        return {
+            "success": True,
+            "source": source_path,
+            "destination": str(safe_dest.relative_to(Path(workspace))),
+            "type": "directory" if safe_dest.is_dir() else "file"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error moving file: {e}")
+        return {"error": str(e)}
+
+def create_directory(directory_path: str, create_parents: bool = True) -> Dict[str, Any]:
+    """
+    Create a new directory.
+    
+    Args:
+        directory_path: Path of the directory to create
+        create_parents: Whether to create parent directories if they don't exist (default: True)
+    
+    Returns:
+        Dictionary containing operation result
+    """
+    try:
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(directory_path, workspace)
+        
+        if safe_path.exists():
+            return {"error": f"Directory {directory_path} already exists"}
+        
+        safe_path.mkdir(parents=create_parents, exist_ok=False)
+        
+        return {
+            "success": True,
+            "path": str(safe_path.relative_to(Path(workspace))),
+            "created": True
+        }
+        
+    except Exception as e:
+        logging.error(f"Error creating directory: {e}")
+        return {"error": str(e)}
+
+def search_files(query: str, directory: str = ".", search_content: bool = False, file_extensions: str = "") -> List[Dict[str, Any]]:
+    """
+    Search for files by name and optionally content.
+    
+    Args:
+        query: Search query string
+        directory: Directory to search in (default: current directory)
+        search_content: Whether to search file contents (default: False)
+        file_extensions: Comma-separated list of file extensions to filter (default: all)
+    
+    Returns:
+        List of matching files with metadata
+    """
+    try:
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(directory, workspace)
+        
+        if not safe_path.exists() or not safe_path.is_dir():
+            return [{"error": f"Directory {directory} does not exist"}]
+        
+        extensions = [ext.strip().lower() for ext in file_extensions.split(",") if ext.strip()]
         results = []
-        search_pattern = pattern if case_sensitive else pattern.lower()
         
-        for item in path_obj.rglob("*"):
+        for item in safe_path.rglob("*"):
             if item.is_file():
-                # Check filename match
-                filename = item.name if case_sensitive else item.name.lower()
-                filename_match = search_pattern in filename
+                # Filter by extension if specified
+                if extensions and item.suffix.lower() not in extensions:
+                    continue
                 
-                content_match = False
-                if content_search:
-                    try:
-                        with open(item, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                            if not case_sensitive:
-                                content = content.lower()
-                            content_match = search_pattern in content
-                    except (UnicodeDecodeError, PermissionError):
-                        pass
-                
-                if filename_match or content_match:
+                # Search filename
+                if query.lower() in item.name.lower():
                     results.append({
-                        "path": str(item),
+                        "path": str(item.relative_to(Path(workspace))),
                         "name": item.name,
                         "size": item.stat().st_size,
-                        "modified": datetime.fromtimestamp(item.stat().st_mtime).isoformat(),
-                        "filename_match": filename_match,
-                        "content_match": content_match
+                        "modified": item.stat().st_mtime,
+                        "match_type": "filename",
+                        "checksum": calculate_checksum(str(item))
                     })
+                # Search content if requested
+                elif search_content and item.stat().st_size < config_manager.config.max_file_size:
+                    try:
+                        with open(item, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                            if query.lower() in content.lower():
+                                results.append({
+                                    "path": str(item.relative_to(Path(workspace))),
+                                    "name": item.name,
+                                    "size": item.stat().st_size,
+                                    "modified": item.stat().st_mtime,
+                                    "match_type": "content",
+                                    "checksum": calculate_checksum(str(item))
+                                })
+                    except Exception:
+                        continue
         
-        result = {
-            "success": True,
-            "search_path": path,
-            "pattern": pattern,
-            "content_search": content_search,
-            "case_sensitive": case_sensitive,
-            "results": results,
-            "total_matches": len(results)
-        }
+        return sorted(results, key=lambda x: x["name"])
         
-        return json.dumps(result, indent=2)
-
     except Exception as e:
-        logger.error(f"Error searching files in {path}: {e}")
-        return json.dumps({"error": f"Error searching files: {str(e)}"})
+        logging.error(f"Error searching files: {e}")
+        return [{"error": str(e)}]
 
-# Configuration tools
-@mcp.tool()
-def get_config() -> str:
-    """Get current configuration"""
-    return json.dumps(config_manager.config, indent=2)
-
-@mcp.tool()
-def set_config(key: str, value: str) -> str:
-    """Set configuration value"""
+def get_file_info(file_path: str) -> Dict[str, Any]:
+    """
+    Get detailed information about a file or directory.
+    
+    Args:
+        file_path: Path to the file or directory
+    
+    Returns:
+        Dictionary containing detailed file information
+    """
     try:
-        # Parse JSON value if it looks like JSON
-        if value.startswith('{') or value.startswith('[') or value in ['true', 'false', 'null']:
-            value = json.loads(value)
+        workspace = config_manager.config.workspace_dir
+        safe_path = get_safe_path(file_path, workspace)
         
-        config_manager.set(key, value)
+        if not safe_path.exists():
+            return {"error": f"Path {file_path} does not exist"}
         
-        result = {
-            "success": True,
-            "key": key,
-            "value": value,
-            "message": "Configuration updated"
+        stat = safe_path.stat()
+        
+        info = {
+            "name": safe_path.name,
+            "path": str(safe_path.relative_to(Path(workspace))),
+            "absolute_path": str(safe_path),
+            "type": "directory" if safe_path.is_dir() else "file",
+            "size": stat.st_size,
+            "created": stat.st_ctime,
+            "modified": stat.st_mtime,
+            "accessed": stat.st_atime,
+            "permissions": oct(stat.st_mode)[-3:],
+            "owner": stat.st_uid,
+            "group": stat.st_gid,
+            "checksum": calculate_checksum(str(safe_path)) if safe_path.is_file() else None
         }
         
-        return json.dumps(result, indent=2)
-    
+        if safe_path.is_file():
+            info["mime_type"] = mimetypes.guess_type(str(safe_path))[0]
+            info["extension"] = safe_path.suffix
+        
+        return info
+        
     except Exception as e:
-        logger.error(f"Error setting config {key}={value}: {e}")
-        return json.dumps({"error": f"Error setting configuration: {str(e)}"})
+        logging.error(f"Error getting file info: {e}")
+        return {"error": str(e)}
 
-# Dual UI Support
-class DualUIServer:
-    def __init__(self, port: int):
-        self.port = port
-        self.server = None
-        self.server_thread = None
-        self.websocket_server = None
-        self.websocket_thread = None
-        self.clients = set()
+def get_config() -> Dict[str, Any]:
+    """
+    Get current configuration settings.
     
-    def start(self):
-        """Start the dual UI server"""
-        try:
-            # Start HTTP server for static files
-            self.server_thread = Thread(target=self._run_http_server)
-            self.server_thread.daemon = True
-            self.server_thread.start()
-            
-            # Start WebSocket server for real-time communication
-            self.websocket_thread = Thread(target=self._run_websocket_server)
-            self.websocket_thread.daemon = True
-            self.websocket_thread.start()
-            
-            logger.info(f"Dual UI server started on port {self.port}")
-            
-        except Exception as e:
-            logger.error(f"Failed to start dual UI server: {e}")
+    Returns:
+        Dictionary containing current configuration
+    """
+    return asdict(config_manager.config)
+
+def update_config(workspace_dir: str = None, debug_mode: bool = None, max_file_size: str = None, 
+                 log_level: str = None, theme: str = None, show_hidden_files: bool = None,
+                 enable_checksums: bool = None, auto_backup: bool = None) -> Dict[str, Any]:
+    """
+    Update configuration settings.
     
-    def _run_http_server(self):
-        """Run HTTP server for static files"""
-        try:
-            handler = SimpleHTTPRequestHandler
-            self.server = HTTPServer(("localhost", self.port), handler)
-            self.server.serve_forever()
-        except Exception as e:
-            logger.error(f"HTTP server error: {e}")
+    Args:
+        workspace_dir: Workspace directory path
+        debug_mode: Enable debug mode
+        max_file_size: Maximum file size in bytes (as string)
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        theme: UI theme (light, dark, system)
+        show_hidden_files: Show hidden files by default
+        enable_checksums: Enable file checksums
+        auto_backup: Enable automatic backups
     
-    def _run_websocket_server(self):
-        """Run WebSocket server for real-time communication"""
-        try:
-            async def handle_client(websocket, path):
-                self.clients.add(websocket)
-                try:
-                    async for message in websocket:
-                        # Handle WebSocket messages
-                        await self._handle_websocket_message(websocket, message)
-                finally:
-                    self.clients.remove(websocket)
+    Returns:
+        Dictionary containing updated configuration
+    """
+    try:
+        updates = {}
+        
+        if workspace_dir is not None:
+            updates["workspace_dir"] = workspace_dir
+        if debug_mode is not None:
+            updates["debug_mode"] = debug_mode
+        if max_file_size is not None:
+            updates["max_file_size"] = int(max_file_size)
+        if log_level is not None:
+            updates["log_level"] = log_level
+        if theme is not None:
+            updates["theme"] = theme
+        if show_hidden_files is not None:
+            updates["show_hidden_files"] = show_hidden_files
+        if enable_checksums is not None:
+            updates["enable_checksums"] = enable_checksums
+        if auto_backup is not None:
+            updates["auto_backup"] = auto_backup
+        
+        return config_manager.update_config(**updates)
+        
+    except Exception as e:
+        logging.error(f"Error updating config: {e}")
+        return {"error": str(e)}
+
+# Create Gradio interface
+def create_interface():
+    """Create the Gradio interface for the file manager"""
+    
+    # File listing interface
+    with gr.Blocks(title="Enhanced DXT File Manager", theme=gr.themes.Soft()) as demo:
+        gr.Markdown("# Enhanced DXT File Manager")
+        gr.Markdown("A powerful file management system with both web UI and MCP server capabilities")
+        
+        with gr.Tab("File Browser"):
+            with gr.Row():
+                directory_input = gr.Textbox(label="Directory", value=".", placeholder="Enter directory path")
+                show_hidden_checkbox = gr.Checkbox(label="Show Hidden Files", value=False)
+                file_type_dropdown = gr.Dropdown(
+                    choices=["all", "files", "directories"],
+                    value="all",
+                    label="Filter Type"
+                )
+                list_button = gr.Button("List Files", variant="primary")
             
-            asyncio.new_event_loop().run_until_complete(
-                websockets.serve(handle_client, "localhost", self.port + 1)
+            file_list_output = gr.JSON(label="Files and Directories")
+            
+            list_button.click(
+                list_files,
+                inputs=[directory_input, show_hidden_checkbox, file_type_dropdown],
+                outputs=file_list_output
             )
-        except Exception as e:
-            logger.error(f"WebSocket server error: {e}")
+        
+        with gr.Tab("File Operations"):
+            with gr.Tab("Read File"):
+                with gr.Row():
+                    read_file_input = gr.Textbox(label="File Path", placeholder="Enter file path to read")
+                    read_encoding_input = gr.Textbox(label="Encoding", value="utf-8")
+                    read_button = gr.Button("Read File", variant="primary")
+                
+                read_output = gr.JSON(label="File Content")
+                
+                read_button.click(
+                    read_file,
+                    inputs=[read_file_input, read_encoding_input],
+                    outputs=read_output
+                )
+            
+            with gr.Tab("Write File"):
+                with gr.Row():
+                    write_file_input = gr.Textbox(label="File Path", placeholder="Enter file path to write")
+                    write_encoding_input = gr.Textbox(label="Encoding", value="utf-8")
+                    write_backup_checkbox = gr.Checkbox(label="Create Backup", value=True)
+                
+                write_content_input = gr.Textbox(
+                    label="Content",
+                    placeholder="Enter file content",
+                    lines=10
+                )
+                write_button = gr.Button("Write File", variant="primary")
+                write_output = gr.JSON(label="Write Result")
+                
+                write_button.click(
+                    write_file,
+                    inputs=[write_file_input, write_content_input, write_encoding_input, write_backup_checkbox],
+                    outputs=write_output
+                )
+            
+            with gr.Tab("Copy/Move"):
+                with gr.Row():
+                    source_input = gr.Textbox(label="Source Path", placeholder="Enter source path")
+                    dest_input = gr.Textbox(label="Destination Path", placeholder="Enter destination path")
+                    overwrite_checkbox = gr.Checkbox(label="Overwrite if exists", value=False)
+                
+                with gr.Row():
+                    copy_button = gr.Button("Copy", variant="secondary")
+                    move_button = gr.Button("Move", variant="secondary")
+                
+                copy_move_output = gr.JSON(label="Operation Result")
+                
+                copy_button.click(
+                    copy_file,
+                    inputs=[source_input, dest_input, overwrite_checkbox],
+                    outputs=copy_move_output
+                )
+                
+                move_button.click(
+                    move_file,
+                    inputs=[source_input, dest_input, overwrite_checkbox],
+                    outputs=copy_move_output
+                )
+            
+            with gr.Tab("Delete"):
+                with gr.Row():
+                    delete_input = gr.Textbox(label="File/Directory Path", placeholder="Enter path to delete")
+                    delete_backup_checkbox = gr.Checkbox(label="Create Backup", value=True)
+                    delete_button = gr.Button("Delete", variant="stop")
+                
+                delete_output = gr.JSON(label="Delete Result")
+                
+                delete_button.click(
+                    delete_file,
+                    inputs=[delete_input, delete_backup_checkbox],
+                    outputs=delete_output
+                )
+        
+        with gr.Tab("Search"):
+            with gr.Row():
+                search_query_input = gr.Textbox(label="Search Query", placeholder="Enter search term")
+                search_dir_input = gr.Textbox(label="Directory", value=".", placeholder="Directory to search")
+                search_content_checkbox = gr.Checkbox(label="Search Content", value=False)
+                search_extensions_input = gr.Textbox(label="File Extensions", placeholder="e.g. .txt,.py,.md")
+                search_button = gr.Button("Search", variant="primary")
+            
+            search_output = gr.JSON(label="Search Results")
+            
+            search_button.click(
+                search_files,
+                inputs=[search_query_input, search_dir_input, search_content_checkbox, search_extensions_input],
+                outputs=search_output
+            )
+        
+        with gr.Tab("File Info"):
+            with gr.Row():
+                info_input = gr.Textbox(label="File/Directory Path", placeholder="Enter path to get info")
+                info_button = gr.Button("Get Info", variant="primary")
+            
+            info_output = gr.JSON(label="File Information")
+            
+            info_button.click(
+                get_file_info,
+                inputs=[info_input],
+                outputs=info_output
+            )
+        
+        with gr.Tab("Configuration"):
+            with gr.Row():
+                config_workspace_input = gr.Textbox(label="Workspace Directory", placeholder="Enter workspace path")
+                config_debug_checkbox = gr.Checkbox(label="Debug Mode", value=False)
+                config_max_size_input = gr.Textbox(label="Max File Size (bytes)", placeholder="10485760")
+            
+            with gr.Row():
+                config_log_level_dropdown = gr.Dropdown(
+                    choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                    value="INFO",
+                    label="Log Level"
+                )
+                config_theme_dropdown = gr.Dropdown(
+                    choices=["light", "dark", "system"],
+                    value="system",
+                    label="Theme"
+                )
+                config_hidden_checkbox = gr.Checkbox(label="Show Hidden Files", value=False)
+            
+            with gr.Row():
+                config_checksums_checkbox = gr.Checkbox(label="Enable Checksums", value=True)
+                config_backup_checkbox = gr.Checkbox(label="Auto Backup", value=True)
+            
+            with gr.Row():
+                get_config_button = gr.Button("Get Config", variant="secondary")
+                update_config_button = gr.Button("Update Config", variant="primary")
+            
+            config_output = gr.JSON(label="Configuration")
+            
+            get_config_button.click(
+                get_config,
+                inputs=[],
+                outputs=config_output
+            )
+            
+            update_config_button.click(
+                update_config,
+                inputs=[
+                    config_workspace_input, config_debug_checkbox, config_max_size_input,
+                    config_log_level_dropdown, config_theme_dropdown, config_hidden_checkbox,
+                    config_checksums_checkbox, config_backup_checkbox
+                ],
+                outputs=config_output
+            )
+        
+        with gr.Tab("Directory Operations"):
+            with gr.Row():
+                create_dir_input = gr.Textbox(label="Directory Path", placeholder="Enter directory path to create")
+                create_parents_checkbox = gr.Checkbox(label="Create Parent Directories", value=True)
+                create_dir_button = gr.Button("Create Directory", variant="primary")
+            
+            create_dir_output = gr.JSON(label="Directory Creation Result")
+            
+            create_dir_button.click(
+                create_directory,
+                inputs=[create_dir_input, create_parents_checkbox],
+                outputs=create_dir_output
+            )
+        
+        # Status information
+        with gr.Row():
+            gr.Markdown("### Status")
+            status_output = gr.Textbox(
+                label="System Status",
+                value="Enhanced DXT File Manager ready. MCP server enabled for agent integration.",
+                interactive=False
+            )
     
-    async def _handle_websocket_message(self, websocket, message):
-        """Handle incoming WebSocket messages"""
-        try:
-            data = json.loads(message)
-            # Process WebSocket commands here
-            response = {"type": "response", "data": "Message received"}
-            await websocket.send(json.dumps(response))
-        except Exception as e:
-            logger.error(f"WebSocket message error: {e}")
-    
-    def broadcast(self, message: Dict[str, Any]):
-        """Broadcast message to all connected clients"""
-        if self.clients:
-            for client in self.clients.copy():
-                try:
-                    asyncio.create_task(client.send(json.dumps(message)))
-                except Exception as e:
-                    logger.error(f"Broadcast error: {e}")
-                    self.clients.discard(client)
-    
-    def stop(self):
-        """Stop the dual UI server"""
-        if self.server:
-            self.server.shutdown()
-        if self.websocket_server:
-            self.websocket_server.close()
+    return demo
 
-# Initialize dual UI server
-ui_server = DualUIServer(args.ui_port)
+def setup_logging():
+    """Setup logging configuration"""
+    log_level = getattr(logging, config_manager.config.log_level.upper())
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('file_manager.log')
+        ]
+    )
 
-# Main execution
-if __name__ == "__main__":
-    # Debug output if enabled
-    if args.debug:
-        logger.info("Starting Enhanced File Manager MCP Server with Dual UI...")
-        logger.info(f"Workspace: {args.workspace}")
-        logger.info(f"UI Port: {args.ui_port}")
-        logger.info(f"Max File Size: {args.max_file_size}MB")
-        logger.info(f"Log Level: {args.log_level}")
+def main():
+    """Main function to run the Enhanced DXT File Manager"""
+    parser = argparse.ArgumentParser(description="Enhanced DXT File Manager with Gradio")
+    parser.add_argument("--workspace", default=".", help="Workspace directory")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--port", type=int, default=7860, help="UI port")
+    parser.add_argument("--max-file-size", type=int, default=10485760, help="Maximum file size in bytes")
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="Log level")
+    parser.add_argument("--no-mcp", action="store_true", help="Disable MCP server")
+    parser.add_argument("--share", action="store_true", help="Enable Gradio sharing")
     
-    # Start dual UI server
-    ui_server.start()
+    args = parser.parse_args()
     
-    # Run the MCP server
+    # Update configuration with command line arguments
+    config_manager.config.workspace_dir = os.path.abspath(args.workspace)
+    config_manager.config.debug_mode = args.debug
+    config_manager.config.ui_port = args.port
+    config_manager.config.max_file_size = args.max_file_size
+    config_manager.config.log_level = args.log_level
+    config_manager.config.mcp_enabled = not args.no_mcp
+    config_manager.save_config()
+    
+    setup_logging()
+    
+    # Create workspace directory if it doesn't exist
+    os.makedirs(config_manager.config.workspace_dir, exist_ok=True)
+    
+    logging.info(f"Starting Enhanced DXT File Manager")
+    logging.info(f"Workspace: {config_manager.config.workspace_dir}")
+    logging.info(f"UI Port: {config_manager.config.ui_port}")
+    logging.info(f"MCP Enabled: {config_manager.config.mcp_enabled}")
+    
+    # Create and launch Gradio interface
+    demo = create_interface()
+    
     try:
-        mcp.run()
-    except KeyboardInterrupt:
-        logger.info("Server shutting down...")
-        ui_server.stop()
+        # Launch with MCP server enabled
+        demo.launch(
+            server_port=config_manager.config.ui_port,
+            server_name="0.0.0.0",
+            mcp_server=config_manager.config.mcp_enabled,
+            share=args.share,
+            inbrowser=True
+        )
     except Exception as e:
-        logger.error(f"Server error: {e}")
-        ui_server.stop()
+        logging.error(f"Failed to start server: {e}")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
