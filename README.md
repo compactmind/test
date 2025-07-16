@@ -1,6 +1,6 @@
 # Enhanced Python File Manager MCP - DXT Integration
 
-This is an enhanced Desktop Extension (DXT) implementation of a Python-based MCP (Model Context Protocol) server that provides comprehensive file management capabilities with a modern dual UI interface.
+This is an Desktop Extension (DXT) implementation of a Python-based MCP (Model Context Protocol) server that provides comprehensive file management capabilities with interface.
 
 ## Features
 
@@ -14,12 +14,10 @@ This is an enhanced Desktop Extension (DXT) implementation of a Python-based MCP
 - **Search Files**: Advanced search with content search and regex support
 
 ### Enhanced DXT Features
-- **Dual UI Support**: Modern web-based overlay interface with hotkey activation
 - **Theme Support**: Dark/light/auto themes with system preference detection
 - **Real-time Updates**: WebSocket-based real-time file system monitoring
 - **Security**: Sandboxed operations with capability-based permissions
 - **Configuration**: Persistent user configuration with validation
-- **Accessibility**: Full keyboard navigation and screen reader support
 
 ### Security & Permissions
 - **Workspace Isolation**: All operations restricted to user-defined workspace
@@ -63,15 +61,12 @@ python server/main.py --workspace=/path/to/workspace --ui-port=8080
 
 ### Environment Variables
 - `WORKSPACE_PATH`: Default workspace directory
-- `UI_PORT`: Port for the dual UI server
+- `UI_PORT`: Port for UI
 - `MCP_PORT`: Port for MCP communication
 - `LOG_LEVEL`: Logging level
 - `MAX_FILE_SIZE`: Maximum file size limit
 
-## Dual UI Interface
-
-### Overlay Activation
-- **Hotkey**: `Ctrl+Shift+F` (Windows/Linux) or `Cmd+Shift+F` (macOS)
+## Interface
 - **Responsive Design**: Adapts to different screen sizes
 - **Keyboard Navigation**: Full keyboard support for accessibility
 
