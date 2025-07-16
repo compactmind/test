@@ -1,14 +1,13 @@
-# Enhanced DXT File Manager
+# DXT File Manager
 
-A powerful file management system with **Gradio UI** and **MCP server** capabilities, designed for seamless integration with overlay systems and chat agents.
+A powerful file management system with **Gradio UI** and **MCP server** capabilities
 
 ## 🚀 Features
 
-### Dual Interface System
+### Interface System
 - **Web Interface**: Modern Gradio-based UI accessible at `http://localhost:7860`
 - **MCP Server**: Streaming endpoint at `http://localhost:7860/gradio_api/mcp/sse`
-- **Overlay Integration**: Compatible with overlay systems via hotkeys (Ctrl+Shift+F)
-- **Chat Agent Integration**: Streaming results to chat agent text UI
+- **Chat Agent Integration**: Streaming results to chat agent
 
 ### File Management Capabilities
 - **Comprehensive File Operations**: List, read, write, copy, move, delete
@@ -139,7 +138,7 @@ For Claude Desktop or similar MCP clients:
   "mcpServers": {
     "dxt-file-manager": {
       "command": "python",
-      "args": ["/path/to/enhanced-dxt-file-manager/server/main.py"],
+      "args": ["/path/to/dxt-file-manager/server/main.py"],
       "env": {
         "WORKSPACE_DIR": "/path/to/workspace"
       }
@@ -151,16 +150,9 @@ For Claude Desktop or similar MCP clients:
 ## 🎨 Overlay System Integration
 
 ### Hotkey Configuration
-- **Default Hotkey**: Ctrl+Shift+F (Cmd+Shift+F on macOS)
 - **Position**: Center screen
 - **Size**: 900x700 (resizable)
 - **Features**: Draggable, resizable, minimizable
-
-### Overlay Features
-- **Real-time Sync**: Changes sync with chat agent
-- **Context Awareness**: Integrates with current workspace
-- **Streaming Updates**: Live updates to overlay interface
-- **Chat Integration**: Results stream to chat agent text UI
 
 ## 🔒 Security
 
@@ -218,7 +210,7 @@ python -m pytest tests/gradio/
 
 ### Project Structure
 ```
-enhanced-dxt-file-manager/
+dxt-file-manager/
 ├── server/
 │   └── main.py              # Gradio + MCP server
 ├── .config/
@@ -235,7 +227,7 @@ enhanced-dxt-file-manager/
 ```bash
 # Clone and setup
 git clone <repository>
-cd enhanced-dxt-file-manager
+cd dxt-file-manager
 
 # Create development environment
 python3 -m venv venv
