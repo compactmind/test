@@ -1,0 +1,10 @@
+{
+  "backup_on_delete": true,
+  "debug_mode": true,
+  "enable_checksums": false,
+  "log_level": "info",
+  "max_file_size": 100,
+  "show_hidden_files": false,
+  "theme": "auto",
+  "workspace_directory": "${HOME}/Documents"
+}

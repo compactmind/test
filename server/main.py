@@ -8,10 +8,12 @@ import shutil
 import logging
 import asyncio
 import argparse
+import signal
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
+import websockets
 import socket
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from threading import Thread
@@ -43,6 +45,18 @@ logger = logging.getLogger(__name__)
 
 # Initialize enhanced server
 mcp = FastMCP("file-manager-python-enhanced")
+
+# **CRITICAL FIX: Add signal handling to prevent silent crashes**
+def signal_handler(signum, frame):
+    """Handle system signals gracefully"""
+    logger.info(f"🛑 Received signal {signum}, shutting down gracefully...")
+    if 'ui_server' in globals():
+        ui_server.stop()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Configuration management
 class ConfigManager:
@@ -574,41 +588,56 @@ def set_config(key: str, value: str) -> str:
         logger.error(f"Error setting config {key}={value}: {e}")
         return json.dumps({"error": f"Error setting configuration: {str(e)}"})
 
-# **CRITICAL FIX: Simplified Dual UI Server - No WebSocket Blocking**
+# Dual UI Support
 class DualUIServer:
     def __init__(self, port: int):
         self.port = port
         self.server = None
         self.server_thread = None
+        self.websocket_server = None
+        self.websocket_thread = None
+        self.clients = set()
+        self._websocket_loop = None # Initialize the loop attribute
         self._running = False
+        self._shutdown_event = threading.Event()
     
     def start(self):
-        """Start the simplified dual UI server"""
+        """Start the dual UI server"""
         try:
-            # Check if port is already in use
-            if self._check_port_in_use():
-                logger.warning(f"Port {self.port} is already in use, attempting to use different port")
-                # Try alternative port
+            # Check if ports are already in use
+            if self._check_ports_in_use():
+                logger.warning(f"Ports {self.port} or {self.port + 1} are already in use, attempting to use different ports")
+                # Try alternative ports
                 self.port = self._find_available_port(self.port)
             
             self._running = True
+            self._shutdown_event.clear()
             
-            # Start HTTP server for static files only
+            # Start HTTP server for static files
             self.server_thread = Thread(target=self._run_http_server)
-            self.server_thread.daemon = False  # **CRITICAL FIX: Non-daemon thread to keep process alive**
+            self.server_thread.daemon = True
             self.server_thread.start()
+            
+            # Start WebSocket server for real-time communication
+            self.websocket_thread = Thread(target=self._run_websocket_server)
+            self.websocket_thread.daemon = True
+            self.websocket_thread.start()
             
             logger.info(f"Dual UI server started on port {self.port}")
             
         except Exception as e:
             logger.error(f"Failed to start dual UI server: {e}")
     
-    def _check_port_in_use(self) -> bool:
-        """Check if the required port is already in use"""
+    def _check_ports_in_use(self) -> bool:
+        """Check if the required ports are already in use"""
         import socket
         try:
+            # Check HTTP port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind(("localhost", self.port))
+            # Check WebSocket port
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("localhost", self.port + 1))
             return False
         except OSError:
             return True
@@ -618,9 +647,12 @@ class DualUIServer:
         import socket
         for port in range(start_port, start_port + 100):
             try:
+                # Check both HTTP and WebSocket ports
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.bind(("localhost", port))
-                logger.info(f"Found available port: HTTP={port}")
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("localhost", port + 1))
+                logger.info(f"Found available ports: HTTP={port}, WebSocket={port + 1}")
                 return port
             except OSError:
                 continue
@@ -632,14 +664,71 @@ class DualUIServer:
         try:
             handler = SimpleHTTPRequestHandler
             self.server = HTTPServer(("localhost", self.port), handler)
-            while self._running:
+            while self._running and not self._shutdown_event.is_set():
                 self.server.handle_request()
         except Exception as e:
             logger.error(f"HTTP server error: {e}")
     
+    def _run_websocket_server(self):
+        """Run WebSocket server for real-time communication"""
+        try:
+            # Set the event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._websocket_loop = loop # Assign the loop to the instance attribute
+            
+            async def handle_client(websocket, path):
+                self.clients.add(websocket)
+                try:
+                    async for message in websocket:
+                        # Handle WebSocket messages
+                        await self._handle_websocket_message(websocket, message)
+                finally:
+                    self.clients.remove(websocket)
+            
+            # Start WebSocket server
+            start_server = websockets.serve(handle_client, "localhost", self.port + 1)
+            self.websocket_server = loop.run_until_complete(start_server)
+            
+            # Run the loop until shutdown
+            while self._running and not self._shutdown_event.is_set():
+                loop.run_until_complete(asyncio.sleep(0.1))
+                
+        except Exception as e:
+            logger.error(f"WebSocket server error: {e}")
+    
+    async def _handle_websocket_message(self, websocket, message):
+        """Handle incoming WebSocket messages"""
+        try:
+            data = json.loads(message)
+            # Process WebSocket commands here
+            response = {"type": "response", "data": "Message received"}
+            await websocket.send(json.dumps(response))
+        except Exception as e:
+            logger.error(f"WebSocket message error: {e}")
+    
+    def broadcast(self, message: Dict[str, Any]):
+        """Broadcast message to all connected clients"""
+        if self.clients:
+            for client in self.clients.copy():
+                try:
+                    # Create a task in the WebSocket thread's event loop
+                    if hasattr(self, '_websocket_loop') and self._websocket_loop:
+                        asyncio.run_coroutine_threadsafe(
+                            client.send(json.dumps(message)), 
+                            self._websocket_loop
+                        )
+                    else:
+                        # Fallback: try to send directly
+                        client.send(json.dumps(message))
+                except Exception as e:
+                    logger.error(f"Broadcast error: {e}")
+                    self.clients.discard(client)
+    
     def stop(self):
         """Stop the dual UI server"""
         self._running = False
+        self._shutdown_event.set()
         
         if self.server:
             try:
@@ -647,9 +736,17 @@ class DualUIServer:
             except:
                 pass
         
-        # Wait for thread to finish
+        if self.websocket_server:
+            try:
+                self.websocket_server.close()
+            except:
+                pass
+        
+        # Wait for threads to finish
         if self.server_thread and self.server_thread.is_alive():
             self.server_thread.join(timeout=2)
+        if self.websocket_thread and self.websocket_thread.is_alive():
+            self.websocket_thread.join(timeout=2)
 
 # Initialize dual UI server
 ui_server = DualUIServer(args.ui_port)
@@ -667,40 +764,66 @@ if __name__ == "__main__":
     # Start dual UI server
     ui_server.start()
     
-    # **CRITICAL FIX: Run the MCP server properly to keep it running**
+    # **CRITICAL FIX: Run the MCP server with proper error handling**
     try:
         logger.info("Starting MCP server...")
         
-        # **CRITICAL FIX: Add proper signal handling and process management**
-        import signal
+        # **CRITICAL FIX: Add proper error handling and debugging**
+        logger.info("Initializing FastMCP server...")
         
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, shutting down gracefully...")
-            ui_server.stop()
-            sys.exit(0)
+        # Check if MCP server is properly configured
+        if not hasattr(mcp, 'run'):
+            logger.error("❌ FastMCP server not properly initialized - missing run method")
+            sys.exit(1)
         
-        # Register signal handlers
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+        logger.info("✅ FastMCP server initialized successfully")
+        logger.info("🚀 Starting MCP server main loop...")
         
-        # **CRITICAL FIX: Run MCP server in a way that keeps the process alive**
-        logger.info("MCP server starting, process will stay alive...")
+        # **CRITICAL FIX: Start MCP server in a separate thread to prevent blocking**
+        def run_mcp_server():
+            try:
+                logger.info("🔄 MCP server thread started")
+                mcp.run()
+            except Exception as e:
+                logger.error(f"❌ MCP server thread error: {e}")
+                import traceback
+                logger.error(f"❌ MCP server traceback:\n{traceback.format_exc()}")
+                sys.exit(1)
         
-        # **CRITICAL FIX: Simple and reliable MCP server execution**
-        logger.info("Starting MCP server in main thread...")
+        # Start MCP server in background thread
+        mcp_thread = Thread(target=run_mcp_server, daemon=True)
+        mcp_thread.start()
         
-        # Use FastMCP's built-in run method which should block forever
-        # This is the correct way to run a FastMCP server
-        # The dual UI server threads will keep the process alive
-        mcp.run()
+        logger.info("✅ MCP server started in background thread")
+        logger.info("🔄 Main process keeping alive...")
+        
+        # **CRITICAL FIX: Keep main process alive and monitor MCP server**
+        while True:
+            time.sleep(1)
+            
+            # Check if MCP server thread is still alive
+            if not mcp_thread.is_alive():
+                logger.error("❌ MCP server thread died unexpectedly")
+                break
+            
+            # Log heartbeat every 30 seconds
+            if int(time.time()) % 30 == 0:
+                logger.info("💓 Server heartbeat - MCP server running normally")
         
     except KeyboardInterrupt:
-        logger.info("Server shutting down...")
+        logger.info("🛑 Server shutting down due to keyboard interrupt...")
         ui_server.stop()
     except Exception as e:
-        logger.error(f"Server error: {e}")
-        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+        logger.error(f"❌ Server error: {e}")
+        logger.error(f"❌ Error type: {type(e).__name__}")
+        logger.error(f"❌ Error details: {str(e)}")
+        
+        # **CRITICAL FIX: Add traceback for debugging**
         import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"❌ Full traceback:\n{traceback.format_exc()}")
+        
         ui_server.stop()
         sys.exit(1)
+    finally:
+        logger.info("🧹 Cleaning up server resources...")
+        ui_server.stop()
